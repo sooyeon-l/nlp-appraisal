@@ -5,9 +5,9 @@ import numpy as np
 import pandas as pd
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from model import AppraisalModel
-from dataset import AppraisalDataset    
-from loss import weighted_mse_loss
+from src.model import AppraisalModel
+from src.dataset import AppraisalDataset
+from src.loss import weighted_mse_loss
 from transformers import AutoTokenizer
 from transformers import AutoModel
 from torch.optim import AdamW

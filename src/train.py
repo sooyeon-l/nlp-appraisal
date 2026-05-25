@@ -9,11 +9,11 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, AutoModel
-from src.model import AppraisalModel
+from src.model import AppraisalModel, freeze_roberta_layers, confirm_trainable_status
 from src.dataset import AppraisalDataset
 from src.loss import weighted_mse_loss
 from src.config import (
-    SAVE_PATH, MODEL_NAME, TARGET_DIMS, BATCH_SIZE, N_EPOCHS, EARLY_STOPPING_PATIENCE, LR_BASE_MODEL, LR_LINEAR, SCHEDULER_FACTOR, SCHEDULER_PATIENCE
+    SAVE_PATH, MODEL_NAME, TARGET_DIMS, BATCH_SIZE, N_EPOCHS, EARLY_STOPPING_PATIENCE, LR_LINEAR, SCHEDULER_FACTOR, SCHEDULER_PATIENCE
 )
 
 
@@ -44,8 +44,9 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
     model.to(device)
+    freeze_roberta_layers(model)
+    confirm_trainable_status(model)
     optimizer = AdamW([
-        {'params': model.base_model.parameters(), 'lr':LR_BASE_MODEL},
         {'params': model.linear.parameters(), 'lr': LR_LINEAR}
     ])
 

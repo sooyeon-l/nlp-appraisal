@@ -58,7 +58,7 @@ def train_model(model, optimizer, scheduler, train_loader, val_loader,
                 'epoch': epoch, 
                 'model_state_dict': model.state_dict(), 
                 'optimizer_state_dict': optimizer.state_dict(), 
-                'best_val_loss': best_val_loss, 
+                'best_val_loss': float(best_val_loss), 
             }, checkpoint_path)
             print("New best model saved.")
             epochs_without_improvement = 0

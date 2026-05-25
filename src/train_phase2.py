@@ -9,11 +9,11 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, AutoModel
-from src.model import AppraisalModel
+from src.model import AppraisalModel, unfreeze_roberta_layers, confirm_trainable_status
 from src.dataset import AppraisalDataset
 from src.loss import weighted_mse_loss
 from src.config import (
-    SAVE_PATH, MODEL_NAME, TARGET_DIMS, BATCH_SIZE, N_EPOCHS, EARLY_STOPPING_PATIENCE, LR_BASE_MODEL, LR_LINEAR, SCHEDULER_FACTOR, SCHEDULER_PATIENCE
+    SAVE_PATH, MODEL_NAME, TARGET_DIMS, BATCH_SIZE, N_EPOCHS, EARLY_STOPPING_PATIENCE, LR_BASE_MODEL_P2, LR_LINEAR_P2, SCHEDULER_FACTOR, SCHEDULER_PATIENCE, DROPOUT_P
 )
 
 
@@ -24,7 +24,8 @@ def main():
     
     checkpoint_path = os.path.join(SAVE_PATH, f'best_model_{args.run}.pt')
     training_log_path = os.path.join(SAVE_PATH, f'training_log_{args.run}.csv')
-    
+    phase1_checkpoint_path = os.path.join(SAVE_PATH, 'best_model_phase1.pt')
+       
 
     loss_record = []
     best_val_loss = float('inf')
@@ -32,22 +33,25 @@ def main():
 
     weights_json = json.load(open(os.path.join(SAVE_PATH, 'dim_weights.json'), 'r'))
     roberta = AutoModel.from_pretrained(MODEL_NAME)
-    model = AppraisalModel(roberta, num_labels=len(TARGET_DIMS))
+    model = AppraisalModel(roberta, num_labels=len(TARGET_DIMS), dropout_p=DROPOUT_P)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     train_dataset = AppraisalDataset(os.path.join(SAVE_PATH, 'train.csv'), tokenizer, weights_json, TARGET_DIMS)
     val_dataset = AppraisalDataset(os.path.join(SAVE_PATH, 'val.csv'), tokenizer, weights_json, TARGET_DIMS)
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)  
 
-    
-
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
+    if os.path.exists(phase1_checkpoint_path):
+        model.load_state_dict(torch.load(phase1_checkpoint_path, map_location=device))
     model.to(device)
+    unfreeze_roberta_layers(model)  
     optimizer = AdamW([
-        {'params': model.base_model.parameters(), 'lr':LR_BASE_MODEL},
-        {'params': model.linear.parameters(), 'lr': LR_LINEAR}
+        {'params': model.base_model.parameters(), 'lr':LR_BASE_MODEL_P2},
+        {'params': model.linear.parameters(), 'lr': LR_LINEAR_P2}
     ])
+
+    confirm_trainable_status(model)  
 
     scheduler = ReduceLROnPlateau(
         optimizer,

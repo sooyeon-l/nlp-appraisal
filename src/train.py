@@ -15,7 +15,7 @@ from src.dataset import AppraisalDataset
 from src.loss import weighted_mse_loss
 from src.trainer import train_model
 from src.config import (
-    DROPOUT_P, SAVE_PATH, MODEL_NAME, TARGET_DIMS, BATCH_SIZE, N_EPOCHS, EARLY_STOPPING_PATIENCE, LR_LINEAR, SCHEDULER_FACTOR, SCHEDULER_PATIENCE, RANDOM_SEED, GRAD_CLIP
+    DROPOUT_P, SAVE_PATH, MODEL_NAME, TARGET_DIMS, BATCH_SIZE, N_EPOCHS, EARLY_STOPPING_PATIENCE, LR_LINEAR, SCHEDULER_FACTOR, SCHEDULER_PATIENCE, RANDOM_SEED, GRAD_CLIP, WEIGHT_DECAY
 )
 
 
@@ -37,7 +37,8 @@ def main():
     config_snapshot = {
         'model_name': MODEL_NAME, 'batch_size': BATCH_SIZE,
         'n_epochs': N_EPOCHS, 'lr_base': 'NONE',
-        'lr_linear': LR_LINEAR, 'seed': RANDOM_SEED, 'dropout': 'NONE'
+        'lr_linear': LR_LINEAR, 'seed': RANDOM_SEED, 'dropout': 'NONE', 
+        'weight_decay': WEIGHT_DECAY
     }
     pd.DataFrame([config_snapshot]).to_csv(
         os.path.join(SAVE_PATH, f'config_{args.run}.csv'), index=False
@@ -63,9 +64,11 @@ def main():
     model.to(device)
     freeze_roberta_layers(model)
     confirm_trainable_status(model)
-    optimizer = AdamW([
-        {'params': model.linear.parameters(), 'lr': LR_LINEAR}
-    ])
+    optimizer = AdamW(
+        model.linear.parameters(), 
+        lr=LR_LINEAR, 
+        weight_decay=WEIGHT_DECAY
+    )
 
     scheduler = ReduceLROnPlateau(
         optimizer,
@@ -75,7 +78,7 @@ def main():
     )
 
     loss_record = train_model(model, optimizer, scheduler, train_loader, val_loader, N_EPOCHS, EARLY_STOPPING_PATIENCE, checkpoint_path, training_log_path, TARGET_DIMS, device, grad_clip=1.0)
-    
+
     pd.Series(loss_record).to_csv(
         os.path.join(SAVE_PATH, f'batch_losses_{args.run}.csv'), 
         index=False, 

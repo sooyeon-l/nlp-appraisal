@@ -16,7 +16,7 @@ from src.loss import weighted_mse_loss
 from src.trainer import train_model
 from src.config import (
     SAVE_PATH, MODEL_NAME, TARGET_DIMS, BATCH_SIZE, N_EPOCHS, EARLY_STOPPING_PATIENCE,
-    LR_BASE_MODEL_P2, LR_LINEAR_P2, SCHEDULER_FACTOR, SCHEDULER_PATIENCE, DROPOUT_P, RANDOM_SEED, GRAD_CLIP
+    LR_BASE_MODEL_P2, LR_LINEAR_P2, SCHEDULER_FACTOR, SCHEDULER_PATIENCE, DROPOUT_P, RANDOM_SEED, GRAD_CLIP, WEIGHT_DECAY
 )
 
 
@@ -29,17 +29,19 @@ def main():
     torch.backends.cudnn.benchmark = False
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--run', type=str, required=True, help='Run name e.g. phase1, phase2')
+    parser.add_argument('--run', type=str, required=True, help='Run name e.g. phase3_ft')
+    parser.add_argument('--phase1_run', type=str, required=True, help='Name of the phase1 run to load checkpoint from')
     args = parser.parse_args()
 
     checkpoint_path = os.path.join(SAVE_PATH, f'best_model_{args.run}.pt')
     training_log_path = os.path.join(SAVE_PATH, f'training_log_{args.run}.csv')
-    phase1_checkpoint_path = os.path.join(SAVE_PATH, 'best_model_phase1.pt')
+    phase1_checkpoint_path = os.path.join(SAVE_PATH, f'best_model_{args.phase1_run}.pt')
 
     config_snapshot = {
         'model_name': MODEL_NAME, 'batch_size': BATCH_SIZE,
         'n_epochs': N_EPOCHS, 'lr_base': LR_BASE_MODEL_P2,
-        'lr_linear': LR_LINEAR_P2, 'seed': RANDOM_SEED, 'dropout': DROPOUT_P
+        'lr_linear': LR_LINEAR_P2, 'seed': RANDOM_SEED, 'dropout': DROPOUT_P, 
+        'weight_decay': WEIGHT_DECAY
     }
     pd.DataFrame([config_snapshot]).to_csv(
         os.path.join(SAVE_PATH, f'config_{args.run}.csv'), index=False
@@ -66,8 +68,8 @@ def main():
     model.to(device)
     unfreeze_roberta_layers(model)
     optimizer = AdamW([
-        {'params': model.base_model.parameters(), 'lr': LR_BASE_MODEL_P2},
-        {'params': model.linear.parameters(), 'lr': LR_LINEAR_P2}
+        {'params': model.base_model.parameters(), 'lr': LR_BASE_MODEL_P2, 'weight_decay': WEIGHT_DECAY},
+        {'params': model.linear.parameters(), 'lr': LR_LINEAR_P2, 'weight_decay': WEIGHT_DECAY}
     ])
     confirm_trainable_status(model)
     scheduler = ReduceLROnPlateau(

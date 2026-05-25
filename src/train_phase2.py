@@ -119,6 +119,12 @@ def main():
         epoch_results.update({f'{dim}_rmse': rmse for dim, rmse in zip(TARGET_DIMS, per_dim_rmse)})
         results_df = pd.DataFrame([epoch_results])
         results_df.to_csv(training_log_path, mode='a', header=not os.path.exists(training_log_path), index=False)
+    # Save batch loss record for plotting
+    pd.Series(loss_record).to_csv(
+        os.path.join(SAVE_PATH, f'batch_losses_{args.run}.csv'), 
+        index=False, 
+        header=['batch_loss']
+    )
 
 
 if __name__ == "__main__":

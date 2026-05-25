@@ -84,15 +84,17 @@ def main():
                 y = batch['labels'].to(device)
                 attention_mask = batch['attention_mask'].to(device)
                 outputs = model(x, attention_mask)
-                # Unweighted MSE for validation to get a clearer signal of true performance
-                val_loss = ((outputs - y) ** 2).mean()
-                val_losses.append(val_loss.item())
-                # Collect predictions and labels
                 all_preds.append(outputs.detach().cpu().numpy())
                 all_labels.append(y.detach().cpu().numpy())
-        avg_val_loss = sum(val_losses) / len(val_losses)
+        # Compute sample-level validation metrics from concatenated arrays
+        all_preds = np.concatenate(all_preds, axis=0)
+        all_labels = np.concatenate(all_labels, axis=0)
+        avg_val_loss = ((all_preds - all_labels) ** 2).mean()
+        per_dim_rmse = np.sqrt(((all_preds - all_labels) ** 2).mean(axis=0))
+
         print(f"Validation Loss: {avg_val_loss:.4f}")
         scheduler.step(avg_val_loss)
+
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), checkpoint_path)
@@ -104,10 +106,7 @@ def main():
                 print("Early stopping triggered.")
                 break
 
-        # Per epoch, 1) overall training loss with weighted MSE, 2) overall validation loss with unweighted MSE, 3) per-dimension validation RMSE for all 15 dimensions are recorded in a table and saved as a CSV file for later analysis. 4) The best model checkpoint is saved based on validation loss.
-        all_preds = np.concatenate(all_preds, axis=0)
-        all_labels = np.concatenate(all_labels, axis=0)
-        per_dim_rmse = np.sqrt(((all_preds - all_labels) ** 2).mean(axis=0))
+       
         # Use target_dims to print per_dim_rmse as a labeled table
         print("Per-dimension validation RMSE:")
         for dim, rmse in zip(TARGET_DIMS, per_dim_rmse):
@@ -121,5 +120,6 @@ def main():
         epoch_results.update({f'{dim}_rmse': rmse for dim, rmse in zip(TARGET_DIMS, per_dim_rmse)})
         results_df = pd.DataFrame([epoch_results])
         results_df.to_csv(training_log_path, mode='a', header=not os.path.exists(training_log_path), index=False)
+        
 if __name__ == "__main__":
     main()

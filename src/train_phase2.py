@@ -61,7 +61,8 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
     if os.path.exists(phase1_checkpoint_path):
-        model.load_state_dict(torch.load(phase1_checkpoint_path, map_location=device, weights_only=True))
+        checkpoint = torch.load(phase1_checkpoint_path, map_location=device, weights_only=True)
+        model.load_state_dict(checkpoint['model_state_dict'])
     model.to(device)
     unfreeze_roberta_layers(model)
     optimizer = AdamW([

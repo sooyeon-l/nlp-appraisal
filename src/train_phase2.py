@@ -1,6 +1,7 @@
 import os
 import argparse
 import json
+import random
 import torch
 import numpy as np
 import pandas as pd
@@ -12,13 +13,21 @@ from transformers import AutoTokenizer, AutoModel
 from src.model import AppraisalModel, unfreeze_roberta_layers, confirm_trainable_status
 from src.dataset import AppraisalDataset
 from src.loss import weighted_mse_loss
+from src.trainer import train_model
 from src.config import (
     SAVE_PATH, MODEL_NAME, TARGET_DIMS, BATCH_SIZE, N_EPOCHS, EARLY_STOPPING_PATIENCE,
-    LR_BASE_MODEL_P2, LR_LINEAR_P2, SCHEDULER_FACTOR, SCHEDULER_PATIENCE, DROPOUT_P
+    LR_BASE_MODEL_P2, LR_LINEAR_P2, SCHEDULER_FACTOR, SCHEDULER_PATIENCE, DROPOUT_P, RANDOM_SEED, GRAD_CLIP
 )
 
 
 def main():
+    torch.manual_seed(RANDOM_SEED)
+    torch.cuda.manual_seed_all(RANDOM_SEED)
+    np.random.seed(RANDOM_SEED)
+    random.seed(RANDOM_SEED)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--run', type=str, required=True, help='Run name e.g. phase1, phase2')
     args = parser.parse_args()
@@ -26,6 +35,15 @@ def main():
     checkpoint_path = os.path.join(SAVE_PATH, f'best_model_{args.run}.pt')
     training_log_path = os.path.join(SAVE_PATH, f'training_log_{args.run}.csv')
     phase1_checkpoint_path = os.path.join(SAVE_PATH, 'best_model_phase1.pt')
+
+    config_snapshot = {
+        'model_name': MODEL_NAME, 'batch_size': BATCH_SIZE,
+        'n_epochs': N_EPOCHS, 'lr_base': LR_BASE_MODEL_P2,
+        'lr_linear': LR_LINEAR_P2, 'seed': RANDOM_SEED, 'dropout': DROPOUT_P
+    }
+    pd.DataFrame([config_snapshot]).to_csv(
+        os.path.join(SAVE_PATH, f'config_{args.run}.csv'), index=False
+    )
 
     loss_record = []
     best_val_loss = float('inf')
@@ -37,13 +55,13 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     train_dataset = AppraisalDataset(os.path.join(SAVE_PATH, 'train.csv'), tokenizer, weights_json, TARGET_DIMS)
     val_dataset = AppraisalDataset(os.path.join(SAVE_PATH, 'val.csv'), tokenizer, weights_json, TARGET_DIMS)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
     if os.path.exists(phase1_checkpoint_path):
-        model.load_state_dict(torch.load(phase1_checkpoint_path, map_location=device))
+        model.load_state_dict(torch.load(phase1_checkpoint_path, map_location=device, weights_only=True))
     model.to(device)
     unfreeze_roberta_layers(model)
     optimizer = AdamW([
@@ -58,68 +76,8 @@ def main():
         patience=SCHEDULER_PATIENCE,
     )
 
-    for epoch in range(N_EPOCHS):
-        all_preds = []
-        all_labels = []
-        model.train()
-        for batch in tqdm(train_loader, leave=False):
-            x = batch['input_ids'].to(device)
-            y = batch['labels'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            weights = batch['weights'].to(device)
-            optimizer.zero_grad()
-            outputs = model(x, attention_mask)
-            loss = weighted_mse_loss(outputs, y, weights)
-            loss.backward()
-            optimizer.step()
-            loss_record.append(loss.item())
+    loss_record = train_model(model, optimizer, scheduler, train_loader, val_loader, N_EPOCHS, EARLY_STOPPING_PATIENCE, checkpoint_path, training_log_path, TARGET_DIMS, device, grad_clip=1.0)
 
-        avg_train_loss = sum(loss_record[-len(train_loader):]) / len(train_loader)
-        print(f"Epoch {epoch + 1}/{N_EPOCHS}, Training Loss: {avg_train_loss:.4f}")
-
-        model.eval()
-        with torch.no_grad():
-            for batch in val_loader:
-                x = batch['input_ids'].to(device)
-                y = batch['labels'].to(device)
-                attention_mask = batch['attention_mask'].to(device)
-                outputs = model(x, attention_mask)
-                all_preds.append(outputs.detach().cpu().numpy())
-                all_labels.append(y.detach().cpu().numpy())
-
-        # Compute sample-level validation metrics from concatenated arrays
-        all_preds = np.concatenate(all_preds, axis=0)
-        all_labels = np.concatenate(all_labels, axis=0)
-        avg_val_loss = ((all_preds - all_labels) ** 2).mean()
-        per_dim_rmse = np.sqrt(((all_preds - all_labels) ** 2).mean(axis=0))
-
-        print(f"Validation Loss: {avg_val_loss:.4f}")
-        scheduler.step(avg_val_loss)
-
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            torch.save(model.state_dict(), checkpoint_path)
-            print("New best model saved.")
-            epochs_without_improvement = 0
-        else:
-            epochs_without_improvement += 1
-            if epochs_without_improvement >= EARLY_STOPPING_PATIENCE:
-                print("Early stopping triggered.")
-                break
-
-        print("Per-dimension validation RMSE:")
-        for dim, rmse in zip(TARGET_DIMS, per_dim_rmse):
-            print(f"{dim}: {rmse:.4f}")
-
-        epoch_results = {
-            'epoch': epoch + 1,
-            'avg_train_loss': avg_train_loss,
-            'avg_val_loss': avg_val_loss,
-        }
-        epoch_results.update({f'{dim}_rmse': rmse for dim, rmse in zip(TARGET_DIMS, per_dim_rmse)})
-        results_df = pd.DataFrame([epoch_results])
-        results_df.to_csv(training_log_path, mode='a', header=not os.path.exists(training_log_path), index=False)
-    # Save batch loss record for plotting
     pd.Series(loss_record).to_csv(
         os.path.join(SAVE_PATH, f'batch_losses_{args.run}.csv'), 
         index=False, 

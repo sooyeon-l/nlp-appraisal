@@ -4,20 +4,26 @@ from torch.utils.data import Dataset
 from datasets import Dataset as HFDataset
 
 class AppraisalDataset(Dataset): 
-    def __init__(self, csv_path: str, tokenizer, weights: dict, target_dims: list): 
-        weights = {dim_name: {int(rating): weight for rating, weight in dim_weights.items()} for dim_name, dim_weights in weights.items()}
+    def __init__(self, csv_path: str, tokenizer, weights: dict, target_dims: list):
         self.target_dims = target_dims
-        df = pd.read_csv(csv_path) 
-        # De-normalize ratings first and then compute the sample weights
-        self.sample_weights = torch.tensor(
-            pd.DataFrame({
-                dim: (df[dim] * 4 + 1).round().astype(int).map(weights[dim]) for dim in target_dims if dim in df.columns
-            }).values, dtype=torch.float32
-        )
+        df = pd.read_csv(csv_path)
+        
+        if weights is not None:
+            weights = {dim_name: {int(rating): weight for rating, weight in dim_weights.items()} 
+                    for dim_name, dim_weights in weights.items()}
+            self.sample_weights = torch.tensor(
+                pd.DataFrame({
+                    dim: (df[dim] * 4 + 1).round().astype(int).map(weights[dim]) 
+                    for dim in target_dims if dim in df.columns
+                }).values, dtype=torch.float32
+            )
+        else:
+            self.sample_weights = torch.ones(len(df))
+        
         hf_dataset = HFDataset.from_pandas(df)
-        # Tokenize everything upfront and cache it
         def tokenize_fn(examples):
-            return tokenizer(examples['generated_text'], truncation=True, padding='max_length', max_length=128)
+            return tokenizer(examples['generated_text'], truncation=True, 
+                            padding='max_length', max_length=128)
         self.tokenized_dataset = hf_dataset.map(tokenize_fn, batched=True)
 
     def __len__(self) -> int:

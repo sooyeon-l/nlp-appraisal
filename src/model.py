@@ -6,7 +6,7 @@ class AppraisalModel(nn.Module):
     def __init__(self, base_model, num_labels=15, dropout_p=0.1):
         super(AppraisalModel, self).__init__()
         self.base_model = base_model
-        self.dropout = nn.Dropout(p=dropout_p)
+        self.dropout = nn.Dropout(p=dropout_p) if dropout_p is not None else nn.Identity()
         self.linear = nn.Linear(self.base_model.config.hidden_size, num_labels)
 
     def forward(self, input_ids, attention_mask):

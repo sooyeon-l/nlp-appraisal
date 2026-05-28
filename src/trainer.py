@@ -48,6 +48,8 @@ def train_model(model, optimizer, scheduler, train_loader, val_loader,
         all_labels = np.concatenate(all_labels, axis=0)
         avg_val_loss = ((all_preds - all_labels) ** 2).mean()
         per_dim_rmse = np.sqrt(((all_preds - all_labels) ** 2).mean(axis=0))
+        per_dim_mae = np.abs(all_preds - all_labels).mean(axis=0)
+
 
         print(f"Validation Loss: {avg_val_loss:.4f}")
         scheduler.step(avg_val_loss)
@@ -72,10 +74,12 @@ def train_model(model, optimizer, scheduler, train_loader, val_loader,
         for dim, rmse in zip(target_dims, per_dim_rmse): 
             print(f"{dim}: {rmse:.4f}")
 
+
         epoch_results = {
             'epoch': epoch + 1, 
             'avg_train_loss': avg_train_loss, 
-            'avg_val_loss': avg_val_loss, 
+            'avg_val_loss': avg_val_loss,
+            'per_dim_mae': per_dim_mae 
         }
         epoch_results.update({f'{dim}_rmse': rmse for dim, rmse in zip(target_dims, per_dim_rmse)})
         results_df = pd.DataFrame([epoch_results])

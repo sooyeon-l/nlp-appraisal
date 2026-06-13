@@ -131,31 +131,6 @@ def train_model(
         ranking = val_results["ranking_metrics"]
         high_intensity = val_results["high_intensity_metrics"]
 
-        epoch_row.update({
-            "exact_top1_accuracy":
-                ranking["exact_top1_accuracy"],
-
-            "tie_aware_top1_accuracy":
-                ranking["tie_aware_top1_accuracy"],
-
-            "top3_overlap":
-                ranking["top3_overlap"],
-
-            "top5_overlap":
-                ranking["top5_overlap"],
-
-            "mean_within_entry_spearman":
-                ranking["mean_within_entry_spearman"],
-
-            "high_intensity_precision":
-                high_intensity["micro_precision"],
-
-            "high_intensity_recall":
-                high_intensity["micro_recall"],
-
-            "high_intensity_f1":
-                high_intensity["micro_f1"],
-        })
         val_objective_loss = val_results["objective_loss"]
 
         scheduler.step(val_objective_loss)
@@ -187,6 +162,30 @@ def train_model(
             "macro_mae": val_results["macro_mae"],
             "macro_pearson": val_results["macro_pearson"],
             "learning_rate": current_lr,
+
+            "exact_top1_accuracy":
+                ranking["exact_top1_accuracy"],
+
+            "tie_aware_top1_accuracy":
+                ranking["tie_aware_top1_accuracy"],
+
+            "top3_overlap":
+                ranking["top3_overlap"],
+
+            "top5_overlap":
+                ranking["top5_overlap"],
+
+            "mean_within_entry_spearman":
+                ranking["mean_within_entry_spearman"],
+
+            "high_intensity_precision":
+                high_intensity["micro_precision"],
+
+            "high_intensity_recall":
+                high_intensity["micro_recall"],
+
+            "high_intensity_f1":
+                high_intensity["micro_f1"],
         }
 
         for dim_name in target_dims:

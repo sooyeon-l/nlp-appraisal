@@ -128,7 +128,34 @@ def train_model(
             loss_mode=loss_mode,
             device=device,
         )
+        ranking = val_results["ranking_metrics"]
+        high_intensity = val_results["high_intensity_metrics"]
 
+        epoch_row.update({
+            "exact_top1_accuracy":
+                ranking["exact_top1_accuracy"],
+
+            "tie_aware_top1_accuracy":
+                ranking["tie_aware_top1_accuracy"],
+
+            "top3_overlap":
+                ranking["top3_overlap"],
+
+            "top5_overlap":
+                ranking["top5_overlap"],
+
+            "mean_within_entry_spearman":
+                ranking["mean_within_entry_spearman"],
+
+            "high_intensity_precision":
+                high_intensity["micro_precision"],
+
+            "high_intensity_recall":
+                high_intensity["micro_recall"],
+
+            "high_intensity_f1":
+                high_intensity["micro_f1"],
+        })
         val_objective_loss = val_results["objective_loss"]
 
         scheduler.step(val_objective_loss)
@@ -141,6 +168,10 @@ def train_model(
             f"val objective={val_objective_loss:.4f} | "
             f"macro RMSE={val_results['macro_rmse']:.4f} | "
             f"macro r={val_results['macro_pearson']:.4f} | "
+            f"within-entry rho="
+            f"{ranking['mean_within_entry_spearman']:.4f} | "
+            f"top-3 overlap={ranking['top3_overlap']:.4f} | "
+            f"high-F1={high_intensity['micro_f1']:.4f} | "
             f"lr={current_lr:.2e}"
         )
 
@@ -239,6 +270,12 @@ def train_model(
                         ],
                         "per_dim_pearson": val_results[
                             "per_dim_pearson"
+                        ],
+                        "ranking_metrics": val_results[
+                            "ranking_metrics"
+                        ],
+                        "high_intensity_metrics": val_results[
+                            "high_intensity_metrics"
                         ],
                     }),
                     file,

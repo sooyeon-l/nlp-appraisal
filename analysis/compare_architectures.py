@@ -56,6 +56,35 @@ for model_label, run_name in RUNS.items():
         )
 
     rows.append(row)
+    ranking = metrics["ranking_metrics"]
+    high_intensity = metrics["high_intensity_metrics"]
+
+    row.update({
+        "Exact Top-1": ranking[
+            "exact_top1_accuracy"
+        ],
+        "Tie-aware Top-1": ranking[
+            "tie_aware_top1_accuracy"
+        ],
+        "Top-3 Overlap": ranking[
+            "top3_overlap"
+        ],
+        "Top-5 Overlap": ranking[
+            "top5_overlap"
+        ],
+        "Within-entry Spearman": ranking[
+            "mean_within_entry_spearman"
+        ],
+        "High-intensity Precision": high_intensity[
+            "micro_precision"
+        ],
+        "High-intensity Recall": high_intensity[
+            "micro_recall"
+        ],
+        "High-intensity F1": high_intensity[
+            "micro_f1"
+        ],
+    })
 
 
 comparison_df = pd.DataFrame(rows)

@@ -10,3 +10,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+data/CovidET-Appraisals/
+outputs/
+outputs/eval/

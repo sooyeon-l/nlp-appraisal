@@ -1,88 +1,161 @@
-import os
-import torch
+from __future__ import annotations
+
 import numpy as np
-import pandas as pd
-from tqdm.auto import tqdm
-from src.loss import weighted_mse_loss
+import torch
 
-def train_model(model, optimizer, scheduler, train_loader, val_loader, 
-                n_epochs, patience, checkpoint_path, training_log_path, 
-                target_dims, device, grad_clip=1.0):
-    
-    loss_record = []
-    best_val_loss = float('inf')
-    epochs_without_improvement = 0
-    
-    for epoch in range(n_epochs):
-        all_preds = []
-        all_labels = []
-        model.train()
-        for batch in tqdm(train_loader, leave=False): 
-            x = batch['input_ids'].to(device)
-            y = batch['labels'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            weights = batch['weights'].to(device)
-            optimizer.zero_grad()
-            outputs = model(x, attention_mask)
-            loss = weighted_mse_loss(outputs, y, weights)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
-            optimizer.step()
-            loss_record.append(loss.item())
-        
-        avg_train_loss = sum(loss_record[-len(train_loader):]) / len(train_loader)
-        print(f"Epoch {epoch + 1}/{n_epochs}, Training Loss: {avg_train_loss:.4f}")
+from src.loss import appraisal_loss
 
 
-        model.eval()
-        with torch.no_grad(): 
-            for batch in val_loader:
-                x = batch['input_ids'].to(device)
-                y = batch['labels'].to(device)
-                attention_mask = batch['attention_mask'].to(device)
-                outputs = model(x, attention_mask)
-                all_preds.append(outputs.detach().cpu().numpy())
-                all_labels.append(y.detach().cpu().numpy())
-        
-        all_preds = np.concatenate(all_preds, axis=0)
-        all_labels = np.concatenate(all_labels, axis=0)
-        avg_val_loss = ((all_preds - all_labels) ** 2).mean()
-        per_dim_rmse = np.sqrt(((all_preds - all_labels) ** 2).mean(axis=0))
-        per_dim_mae = np.abs(all_preds - all_labels).mean(axis=0)
+def _pearson_correlation(
+    predictions: np.ndarray,
+    labels: np.ndarray,
+) -> float:
+    if len(predictions) < 2:
+        return float("nan")
+
+    if np.std(predictions) == 0:
+        return float("nan")
+
+    if np.std(labels) == 0:
+        return float("nan")
+
+    return float(
+        np.corrcoef(predictions, labels)[0, 1]
+    )
 
 
-        print(f"Validation Loss: {avg_val_loss:.4f}")
-        scheduler.step(avg_val_loss)
+def evaluate_model(
+    model,
+    dataloader,
+    target_dims: list[str],
+    objective_groups: dict[str, list[str]],
+    loss_mode: str,
+    device: str,
+) -> dict:
+    model.eval()
 
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            torch.save({
-                'epoch': epoch, 
-                'model_state_dict': model.state_dict(), 
-                'optimizer_state_dict': optimizer.state_dict(), 
-                'best_val_loss': float(best_val_loss), 
-            }, checkpoint_path)
-            print("New best model saved.")
-            epochs_without_improvement = 0
-        else: 
-            epochs_without_improvement += 1
-            if epochs_without_improvement >= patience: 
-                print("Early stopping triggered.")
-                break
-        
-        print("Per-dimension validation RMSE:")
-        for dim, rmse in zip(target_dims, per_dim_rmse): 
-            print(f"{dim}: {rmse:.4f}")
+    all_predictions = []
+    all_labels = []
+    all_masks = []
 
+    total_objective_loss = 0.0
+    total_batches = 0
 
-        epoch_results = {
-            'epoch': epoch + 1, 
-            'avg_train_loss': avg_train_loss, 
-            'avg_val_loss': avg_val_loss,
-            'per_dim_mae': per_dim_mae 
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            weights = batch["weights"].to(device)
+            valid_mask = batch["valid_mask"].to(device)
+
+            predictions = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
+
+            loss = appraisal_loss(
+                predictions=predictions,
+                labels=labels,
+                sample_weights=weights,
+                valid_mask=valid_mask,
+                target_dims=target_dims,
+                objective_groups=objective_groups,
+                loss_mode=loss_mode,
+            )
+
+            total_objective_loss += loss.item()
+            total_batches += 1
+
+            all_predictions.append(
+                predictions.cpu().numpy()
+            )
+
+            all_labels.append(
+                labels.cpu().numpy()
+            )
+
+            all_masks.append(
+                valid_mask.cpu().numpy()
+            )
+
+    predictions = np.concatenate(all_predictions, axis=0)
+    labels = np.concatenate(all_labels, axis=0)
+    masks = np.concatenate(all_masks, axis=0).astype(bool)
+
+    per_dim_rmse = {}
+    per_dim_mae = {}
+    per_dim_pearson = {}
+
+    for dim_idx, dim_name in enumerate(target_dims):
+        valid = masks[:, dim_idx]
+
+        dim_predictions = predictions[valid, dim_idx]
+        dim_labels = labels[valid, dim_idx]
+
+        if len(dim_labels) == 0:
+            per_dim_rmse[dim_name] = float("nan")
+            per_dim_mae[dim_name] = float("nan")
+            per_dim_pearson[dim_name] = float("nan")
+            continue
+
+        errors = dim_predictions - dim_labels
+
+        per_dim_rmse[dim_name] = float(
+            np.sqrt(np.mean(errors ** 2))
+        )
+
+        per_dim_mae[dim_name] = float(
+            np.mean(np.abs(errors))
+        )
+
+        per_dim_pearson[dim_name] = _pearson_correlation(
+            dim_predictions,
+            dim_labels,
+        )
+
+    group_metrics = {}
+
+    for group_name, group_dims in objective_groups.items():
+        group_metrics[group_name] = {
+            "mean_rmse": float(
+                np.nanmean([
+                    per_dim_rmse[dim]
+                    for dim in group_dims
+                ])
+            ),
+            "mean_mae": float(
+                np.nanmean([
+                    per_dim_mae[dim]
+                    for dim in group_dims
+                ])
+            ),
+            "mean_pearson": float(
+                np.nanmean([
+                    per_dim_pearson[dim]
+                    for dim in group_dims
+                ])
+            ),
         }
-        epoch_results.update({f'{dim}_rmse': rmse for dim, rmse in zip(target_dims, per_dim_rmse)})
-        results_df = pd.DataFrame([epoch_results])
-        results_df.to_csv(training_log_path, mode='a', header=not os.path.exists(training_log_path), index=False)
-    
-    return loss_record
+
+    return {
+        "objective_loss": (
+            total_objective_loss / max(total_batches, 1)
+        ),
+        "macro_rmse": float(
+            np.nanmean(list(per_dim_rmse.values()))
+        ),
+        "macro_mae": float(
+            np.nanmean(list(per_dim_mae.values()))
+        ),
+        "macro_pearson": float(
+            np.nanmean(list(per_dim_pearson.values()))
+        ),
+        "per_dim_rmse": per_dim_rmse,
+        "per_dim_mae": per_dim_mae,
+        "per_dim_pearson": per_dim_pearson,
+        "group_metrics": group_metrics,
+        "all_predictions": predictions,
+        "all_labels": labels,
+        "all_masks": masks,
+    }

@@ -1,53 +1,82 @@
 from __future__ import annotations
 
-import numpy as np
-import torch
+import json
+from pathlib import Path
 
+import pandas as pd
+import torch
+from tqdm.auto import tqdm
+
+from src.eval import evaluate_model
 from src.loss import appraisal_loss
 
 
-def _pearson_correlation(
-    predictions: np.ndarray,
-    labels: np.ndarray,
-) -> float:
-    if len(predictions) < 2:
-        return float("nan")
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {
+            key: _json_safe(item)
+            for key, item in value.items()
+        }
 
-    if np.std(predictions) == 0:
-        return float("nan")
+    if isinstance(value, (list, tuple)):
+        return [
+            _json_safe(item)
+            for item in value
+        ]
 
-    if np.std(labels) == 0:
-        return float("nan")
+    if hasattr(value, "item"):
+        return value.item()
 
-    return float(
-        np.corrcoef(predictions, labels)[0, 1]
-    )
+    return value
 
 
-def evaluate_model(
+def train_model(
     model,
-    dataloader,
+    optimizer,
+    scheduler,
+    train_loader,
+    val_loader,
+    n_epochs: int,
+    patience: int,
+    checkpoint_path: str | Path,
+    training_log_path: str | Path,
     target_dims: list[str],
     objective_groups: dict[str, list[str]],
     loss_mode: str,
     device: str,
-) -> dict:
-    model.eval()
+    grad_clip: float = 1.0,
+) -> list[float]:
+    checkpoint_path = Path(checkpoint_path)
+    training_log_path = Path(training_log_path)
 
-    all_predictions = []
-    all_labels = []
-    all_masks = []
+    batch_loss_record = []
+    epoch_rows = []
 
-    total_objective_loss = 0.0
-    total_batches = 0
+    best_val_loss = float("inf")
+    epochs_without_improvement = 0
 
-    with torch.no_grad():
-        for batch in dataloader:
+    for epoch in range(1, n_epochs + 1):
+        # ====================================================
+        # Training
+        # ====================================================
+
+        model.train()
+        epoch_train_losses = []
+
+        progress = tqdm(
+            train_loader,
+            desc=f"Epoch {epoch}/{n_epochs}",
+            leave=False,
+        )
+
+        for batch in progress:
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
             weights = batch["weights"].to(device)
             valid_mask = batch["valid_mask"].to(device)
+
+            optimizer.zero_grad(set_to_none=True)
 
             predictions = model(
                 input_ids=input_ids,
@@ -64,98 +93,165 @@ def evaluate_model(
                 loss_mode=loss_mode,
             )
 
-            total_objective_loss += loss.item()
-            total_batches += 1
+            loss.backward()
 
-            all_predictions.append(
-                predictions.cpu().numpy()
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                max_norm=grad_clip,
             )
 
-            all_labels.append(
-                labels.cpu().numpy()
+            optimizer.step()
+
+            loss_value = float(loss.item())
+
+            epoch_train_losses.append(loss_value)
+            batch_loss_record.append(loss_value)
+
+            progress.set_postfix(
+                train_loss=f"{loss_value:.4f}"
             )
 
-            all_masks.append(
-                valid_mask.cpu().numpy()
-            )
-
-    predictions = np.concatenate(all_predictions, axis=0)
-    labels = np.concatenate(all_labels, axis=0)
-    masks = np.concatenate(all_masks, axis=0).astype(bool)
-
-    per_dim_rmse = {}
-    per_dim_mae = {}
-    per_dim_pearson = {}
-
-    for dim_idx, dim_name in enumerate(target_dims):
-        valid = masks[:, dim_idx]
-
-        dim_predictions = predictions[valid, dim_idx]
-        dim_labels = labels[valid, dim_idx]
-
-        if len(dim_labels) == 0:
-            per_dim_rmse[dim_name] = float("nan")
-            per_dim_mae[dim_name] = float("nan")
-            per_dim_pearson[dim_name] = float("nan")
-            continue
-
-        errors = dim_predictions - dim_labels
-
-        per_dim_rmse[dim_name] = float(
-            np.sqrt(np.mean(errors ** 2))
+        avg_train_loss = sum(epoch_train_losses) / max(
+            len(epoch_train_losses),
+            1,
         )
 
-        per_dim_mae[dim_name] = float(
-            np.mean(np.abs(errors))
+        # ====================================================
+        # Validation
+        # ====================================================
+
+        val_results = evaluate_model(
+            model=model,
+            dataloader=val_loader,
+            target_dims=target_dims,
+            objective_groups=objective_groups,
+            loss_mode=loss_mode,
+            device=device,
         )
 
-        per_dim_pearson[dim_name] = _pearson_correlation(
-            dim_predictions,
-            dim_labels,
+        val_objective_loss = val_results["objective_loss"]
+
+        scheduler.step(val_objective_loss)
+
+        current_lr = optimizer.param_groups[0]["lr"]
+
+        print(
+            f"Epoch {epoch}/{n_epochs} | "
+            f"train objective={avg_train_loss:.4f} | "
+            f"val objective={val_objective_loss:.4f} | "
+            f"macro RMSE={val_results['macro_rmse']:.4f} | "
+            f"macro r={val_results['macro_pearson']:.4f} | "
+            f"lr={current_lr:.2e}"
         )
 
-    group_metrics = {}
+        # ====================================================
+        # Save epoch log
+        # ====================================================
 
-    for group_name, group_dims in objective_groups.items():
-        group_metrics[group_name] = {
-            "mean_rmse": float(
-                np.nanmean([
-                    per_dim_rmse[dim]
-                    for dim in group_dims
-                ])
-            ),
-            "mean_mae": float(
-                np.nanmean([
-                    per_dim_mae[dim]
-                    for dim in group_dims
-                ])
-            ),
-            "mean_pearson": float(
-                np.nanmean([
-                    per_dim_pearson[dim]
-                    for dim in group_dims
-                ])
-            ),
+        epoch_row = {
+            "epoch": epoch,
+            "train_objective_loss": avg_train_loss,
+            "val_objective_loss": val_objective_loss,
+            "macro_rmse": val_results["macro_rmse"],
+            "macro_mae": val_results["macro_mae"],
+            "macro_pearson": val_results["macro_pearson"],
+            "learning_rate": current_lr,
         }
 
-    return {
-        "objective_loss": (
-            total_objective_loss / max(total_batches, 1)
-        ),
-        "macro_rmse": float(
-            np.nanmean(list(per_dim_rmse.values()))
-        ),
-        "macro_mae": float(
-            np.nanmean(list(per_dim_mae.values()))
-        ),
-        "macro_pearson": float(
-            np.nanmean(list(per_dim_pearson.values()))
-        ),
-        "per_dim_rmse": per_dim_rmse,
-        "per_dim_mae": per_dim_mae,
-        "per_dim_pearson": per_dim_pearson,
-        "group_metrics": group_metrics,
-        "all_predictions": predictions,
-        "all_labels": labels,
-        "all_masks": masks,
-    }
+        for dim_name in target_dims:
+            epoch_row[f"{dim_name}_rmse"] = (
+                val_results["per_dim_rmse"][dim_name]
+            )
+
+            epoch_row[f"{dim_name}_mae"] = (
+                val_results["per_dim_mae"][dim_name]
+            )
+
+            epoch_row[f"{dim_name}_pearson"] = (
+                val_results["per_dim_pearson"][dim_name]
+            )
+
+        for group_name, metrics in val_results[
+            "group_metrics"
+        ].items():
+            epoch_row[f"{group_name}_mean_rmse"] = (
+                metrics["mean_rmse"]
+            )
+
+            epoch_row[f"{group_name}_mean_mae"] = (
+                metrics["mean_mae"]
+            )
+
+            epoch_row[f"{group_name}_mean_pearson"] = (
+                metrics["mean_pearson"]
+            )
+
+        epoch_rows.append(epoch_row)
+
+        pd.DataFrame(epoch_rows).to_csv(
+            training_log_path,
+            index=False,
+        )
+
+        # ====================================================
+        # Checkpointing and early stopping
+        # ====================================================
+
+        if val_objective_loss < best_val_loss:
+            best_val_loss = val_objective_loss
+            epochs_without_improvement = 0
+
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "best_val_objective_loss": best_val_loss,
+                    "loss_mode": loss_mode,
+                    "target_dims": target_dims,
+                    "objective_groups": objective_groups,
+                },
+                checkpoint_path,
+            )
+
+            metrics_path = checkpoint_path.with_suffix(
+                ".metrics.json"
+            )
+
+            with open(metrics_path, "w", encoding="utf-8") as file:
+                json.dump(
+                    _json_safe({
+                        "epoch": epoch,
+                        "best_val_objective_loss": best_val_loss,
+                        "macro_rmse": val_results["macro_rmse"],
+                        "macro_mae": val_results["macro_mae"],
+                        "macro_pearson": val_results[
+                            "macro_pearson"
+                        ],
+                        "group_metrics": val_results[
+                            "group_metrics"
+                        ],
+                        "per_dim_rmse": val_results[
+                            "per_dim_rmse"
+                        ],
+                        "per_dim_mae": val_results[
+                            "per_dim_mae"
+                        ],
+                        "per_dim_pearson": val_results[
+                            "per_dim_pearson"
+                        ],
+                    }),
+                    file,
+                    indent=2,
+                )
+
+            print("New best checkpoint saved.")
+
+        else:
+            epochs_without_improvement += 1
+
+            if epochs_without_improvement >= patience:
+                print("Early stopping triggered.")
+                break
+
+    return batch_loss_record

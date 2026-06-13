@@ -1,126 +1,161 @@
 from __future__ import annotations
 
+import numpy as np
 import torch
 
-
-def _safe_weighted_mean(
-    values: torch.Tensor,
-    weights: torch.Tensor,
-    mask: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Compute a weighted average only over valid positions.
-    """
-
-    effective_weights = weights * mask.to(weights.dtype)
-
-    denominator = effective_weights.sum()
-
-    if denominator.item() == 0:
-        return values.sum() * 0.0
-
-    numerator = (
-        values * effective_weights
-    ).sum()
-
-    return numerator / denominator
+from src.loss import appraisal_loss
 
 
-def _safe_unweighted_mean(
-    values: torch.Tensor,
-    mask: torch.Tensor,
-) -> torch.Tensor:
-    valid_values = values[mask]
+def _pearson_correlation(
+    predictions: np.ndarray,
+    labels: np.ndarray,
+) -> float:
+    if len(predictions) < 2:
+        return float("nan")
 
-    if valid_values.numel() == 0:
-        return values.sum() * 0.0
+    if np.std(predictions) == 0:
+        return float("nan")
 
-    return valid_values.mean()
+    if np.std(labels) == 0:
+        return float("nan")
+
+    return float(
+        np.corrcoef(predictions, labels)[0, 1]
+    )
 
 
-def appraisal_loss(
-    predictions: torch.Tensor,
-    labels: torch.Tensor,
-    sample_weights: torch.Tensor,
-    valid_mask: torch.Tensor,
+def evaluate_model(
+    model,
+    dataloader,
     target_dims: list[str],
     objective_groups: dict[str, list[str]],
     loss_mode: str,
-) -> torch.Tensor:
-    """
-    Available modes:
+    device: str,
+) -> dict:
+    model.eval()
 
-    mse
-        Ordinary MSE across all valid target values.
+    all_predictions = []
+    all_labels = []
+    all_masks = []
 
-    weighted_mse
-        Inverse-frequency-weighted MSE across all valid values.
+    total_objective_loss = 0.0
+    total_batches = 0
 
-    group_balanced_mse
-        Compute ordinary MSE separately within each CPM objective,
-        then give each objective equal weight.
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            weights = batch["weights"].to(device)
+            valid_mask = batch["valid_mask"].to(device)
 
-    weighted_group_balanced_mse
-        Compute inverse-frequency-weighted MSE within each CPM
-        objective, then give each objective equal weight.
-    """
+            predictions = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
 
-    if predictions.shape != labels.shape:
-        raise ValueError(
-            f"Prediction shape {predictions.shape} does not match "
-            f"label shape {labels.shape}."
+            loss = appraisal_loss(
+                predictions=predictions,
+                labels=labels,
+                sample_weights=weights,
+                valid_mask=valid_mask,
+                target_dims=target_dims,
+                objective_groups=objective_groups,
+                loss_mode=loss_mode,
+            )
+
+            total_objective_loss += loss.item()
+            total_batches += 1
+
+            all_predictions.append(
+                predictions.cpu().numpy()
+            )
+
+            all_labels.append(
+                labels.cpu().numpy()
+            )
+
+            all_masks.append(
+                valid_mask.cpu().numpy()
+            )
+
+    predictions = np.concatenate(all_predictions, axis=0)
+    labels = np.concatenate(all_labels, axis=0)
+    masks = np.concatenate(all_masks, axis=0).astype(bool)
+
+    per_dim_rmse = {}
+    per_dim_mae = {}
+    per_dim_pearson = {}
+
+    for dim_idx, dim_name in enumerate(target_dims):
+        valid = masks[:, dim_idx]
+
+        dim_predictions = predictions[valid, dim_idx]
+        dim_labels = labels[valid, dim_idx]
+
+        if len(dim_labels) == 0:
+            per_dim_rmse[dim_name] = float("nan")
+            per_dim_mae[dim_name] = float("nan")
+            per_dim_pearson[dim_name] = float("nan")
+            continue
+
+        errors = dim_predictions - dim_labels
+
+        per_dim_rmse[dim_name] = float(
+            np.sqrt(np.mean(errors ** 2))
         )
 
-    squared_error = (predictions - labels) ** 2
-
-    if loss_mode == "mse":
-        return _safe_unweighted_mean(
-            values=squared_error,
-            mask=valid_mask,
+        per_dim_mae[dim_name] = float(
+            np.mean(np.abs(errors))
         )
 
-    if loss_mode == "weighted_mse":
-        return _safe_weighted_mean(
-            values=squared_error,
-            weights=sample_weights,
-            mask=valid_mask,
+        per_dim_pearson[dim_name] = _pearson_correlation(
+            dim_predictions,
+            dim_labels,
         )
 
-    if loss_mode not in {
-        "group_balanced_mse",
-        "weighted_group_balanced_mse",
-    }:
-        raise ValueError(f"Unknown loss_mode: {loss_mode}")
-
-    dim_to_idx = {
-        dim_name: idx
-        for idx, dim_name in enumerate(target_dims)
-    }
-
-    group_losses = []
+    group_metrics = {}
 
     for group_name, group_dims in objective_groups.items():
-        indices = [
-            dim_to_idx[dim_name]
-            for dim_name in group_dims
-        ]
+        group_metrics[group_name] = {
+            "mean_rmse": float(
+                np.nanmean([
+                    per_dim_rmse[dim]
+                    for dim in group_dims
+                ])
+            ),
+            "mean_mae": float(
+                np.nanmean([
+                    per_dim_mae[dim]
+                    for dim in group_dims
+                ])
+            ),
+            "mean_pearson": float(
+                np.nanmean([
+                    per_dim_pearson[dim]
+                    for dim in group_dims
+                ])
+            ),
+        }
 
-        group_error = squared_error[:, indices]
-        group_mask = valid_mask[:, indices]
-        group_weights = sample_weights[:, indices]
-
-        if loss_mode == "group_balanced_mse":
-            group_loss = _safe_unweighted_mean(
-                values=group_error,
-                mask=group_mask,
-            )
-        else:
-            group_loss = _safe_weighted_mean(
-                values=group_error,
-                weights=group_weights,
-                mask=group_mask,
-            )
-
-        group_losses.append(group_loss)
-
-    return torch.stack(group_losses).mean()
+    return {
+        "objective_loss": (
+            total_objective_loss / max(total_batches, 1)
+        ),
+        "macro_rmse": float(
+            np.nanmean(list(per_dim_rmse.values()))
+        ),
+        "macro_mae": float(
+            np.nanmean(list(per_dim_mae.values()))
+        ),
+        "macro_pearson": float(
+            np.nanmean(list(per_dim_pearson.values()))
+        ),
+        "per_dim_rmse": per_dim_rmse,
+        "per_dim_mae": per_dim_mae,
+        "per_dim_pearson": per_dim_pearson,
+        "group_metrics": group_metrics,
+        "all_predictions": predictions,
+        "all_labels": labels,
+        "all_masks": masks,
+    }

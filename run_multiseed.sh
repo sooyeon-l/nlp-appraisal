@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
-LOSS="weighted_mse"
-LOSS_TAG="weighted"
+LOSS="mse"
+LOSS_TAG="mse"
 
 MODELS=(
   "flat_linear"

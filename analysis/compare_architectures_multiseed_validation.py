@@ -7,8 +7,13 @@ import numpy as np
 import pandas as pd
 
 
-RUNS_ROOT = Path("/workspace/data/runs")
-OUTPUT_DIR = Path("/workspace/data/analysis")
+PROJECT_ROOT = Path(
+    "/content/drive/MyDrive/2026-1/NLP/appraisal/nlp-appraisal"
+)
+
+RUNS_ROOT = PROJECT_ROOT / "runs"
+OUTPUT_DIR = PROJECT_ROOT / "outputs" / "eval"
+
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 ARCHITECTURES = {
@@ -55,7 +60,14 @@ for architecture_label, architecture_tag in ARCHITECTURES.items():
         )
 
         run_dir = RUNS_ROOT / run_name
-        metrics_path = run_dir / "best_model.metrics.json"
+        recomputed_path = run_dir / "val_metrics_recomputed.json"
+        original_path = run_dir / "best_model.metrics.json"
+
+        metrics_path = (
+            recomputed_path
+            if recomputed_path.exists()
+            else original_path
+        )
 
         if not metrics_path.exists():
             print(

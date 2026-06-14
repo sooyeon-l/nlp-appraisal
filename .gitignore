@@ -4,8 +4,15 @@
 *.tsv
 *.csv
 __pycache__/
+*.py[cod]
 *.pyc
-*.venv
+.venv/
+
+# Logs and caches
+*.log
+.cache/
+huggingface/
+wandb/
 
 # System files
 .DS_Store
@@ -13,9 +20,18 @@ Thumbs.db
 desktop.ini
 
 data/CovidET-Appraisals/
+data/CovidET-Appraisals/repo/
+outputs/**/*.log
 outputs/
-outputs/eval/
 
+
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# External cloned repositories and datasets
+data/CovidET-Appraisals/repo/
+
+# Ignore all experimental run directories
 runs/
-
-printf "\n# Temporary prediction archives\nbootstrap_predictions.zip\ntest_predictions.zip\n" >> .gitignore

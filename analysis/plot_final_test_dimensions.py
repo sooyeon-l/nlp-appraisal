@@ -5,10 +5,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from src.config import SAVE_PATH
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_DIR = PROJECT_ROOT / "outputs" / "eval"
-FIGURE_DIR = PROJECT_ROOT / "outputs" / "figures"
+DATA_ROOT = Path(SAVE_PATH)
+OUTPUT_DIR = DATA_ROOT / "outputs" / "eval"
+FIGURE_DIR = DATA_ROOT / "outputs" / "figures"
 
 FIGURE_DIR.mkdir(parents=True, exist_ok=True)
 

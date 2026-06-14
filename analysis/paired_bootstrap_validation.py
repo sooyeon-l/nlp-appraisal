@@ -1,23 +1,31 @@
 from __future__ import annotations
 
-import json
+import argparse
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 from sklearn.metrics import precision_recall_fscore_support
 
-from src.config import TARGET_DIMS
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
+
+from src.config import SAVE_PATH, TARGET_DIMS
 
 
 # ============================================================
 # Paths
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RUNS_ROOT = PROJECT_ROOT / "runs"
-OUTPUT_DIR = PROJECT_ROOT / "outputs" / "eval"
+# This matches the rest of the RunPod project:
+# src/config.py defines SAVE_PATH = Path("/workspace/data").
+DATA_ROOT = Path(SAVE_PATH)
+RUNS_ROOT = DATA_ROOT / "runs"
+OUTPUT_DIR = DATA_ROOT / "outputs" / "eval"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -54,9 +62,7 @@ def prediction_path(
     architecture_tag: str,
     seed: int,
 ) -> Path:
-    run_name = (
-        f"{architecture_tag}_ft_mse_seed{seed}"
-    )
+    run_name = f"{architecture_tag}_ft_mse_seed{seed}"
 
     return (
         RUNS_ROOT
@@ -75,9 +81,30 @@ def load_prediction_arrays(
     )
 
     if not path.exists():
-        raise FileNotFoundError(path)
+        raise FileNotFoundError(
+            f"Prediction file not found:\n{path}\n\n"
+            f"RUNS_ROOT is currently: {RUNS_ROOT}"
+        )
 
     df = pd.read_csv(path)
+
+    required_columns = [
+        f"{dimension}_{suffix}"
+        for dimension in TARGET_DIMS
+        for suffix in ("true", "pred")
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in df.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"Missing columns in {path}:\n"
+            + "\n".join(missing_columns)
+        )
 
     labels = np.column_stack([
         df[f"{dimension}_true"].to_numpy(dtype=float)
@@ -326,7 +353,7 @@ def high_intensity_f1(
     return float(f1)
 
 
-METRICS = {
+METRICS: dict[str, Callable] = {
     "Macro RMSE": macro_rmse,
     "Macro MAE": macro_mae,
     "Macro Pearson": macro_pearson,
@@ -358,6 +385,8 @@ def paired_bootstrap(
     metric_name: str,
     n_bootstraps: int = N_BOOTSTRAPS,
     random_seed: int = RANDOM_SEED,
+    show_progress: bool = True,
+    progress_desc: str | None = None,
 ) -> dict:
     metric_function = METRICS[metric_name]
 
@@ -381,9 +410,22 @@ def paired_bootstrap(
     rng = np.random.default_rng(random_seed)
     n_samples = labels.shape[0]
 
-    bootstrap_differences = []
+    bootstrap_differences = np.empty(
+        n_bootstraps,
+        dtype=float,
+    )
+    valid_bootstrap_count = 0
 
-    for _ in range(n_bootstraps):
+    iterator = range(n_bootstraps)
+
+    if show_progress and tqdm is not None:
+        iterator = tqdm(
+            iterator,
+            desc=progress_desc or metric_name,
+            leave=False,
+        )
+
+    for _ in iterator:
         indices = rng.integers(
             low=0,
             high=n_samples,
@@ -392,7 +434,6 @@ def paired_bootstrap(
 
         boot_labels = labels[indices]
         boot_mask = valid_mask[indices]
-
         boot_a = predictions_a[indices]
         boot_b = predictions_b[indices]
 
@@ -415,20 +456,23 @@ def paired_bootstrap(
             continue
 
         if metric_name in LOWER_IS_BETTER:
-            difference = (
-                boot_score_b - boot_score_a
-            )
+            difference = boot_score_b - boot_score_a
         else:
-            difference = (
-                boot_score_a - boot_score_b
-            )
+            difference = boot_score_a - boot_score_b
 
-        bootstrap_differences.append(difference)
+        bootstrap_differences[
+            valid_bootstrap_count
+        ] = difference
+        valid_bootstrap_count += 1
 
-    bootstrap_differences = np.asarray(
-        bootstrap_differences,
-        dtype=float,
-    )
+    bootstrap_differences = bootstrap_differences[
+        :valid_bootstrap_count
+    ]
+
+    if bootstrap_differences.size == 0:
+        raise RuntimeError(
+            f"No valid bootstrap samples for {metric_name}"
+        )
 
     ci_low, ci_high = np.percentile(
         bootstrap_differences,
@@ -446,7 +490,6 @@ def paired_bootstrap(
             np.mean(bootstrap_differences >= 0),
         )
     )
-
     two_sided_p = min(two_sided_p, 1.0)
 
     return {
@@ -465,129 +508,196 @@ def paired_bootstrap(
 
 
 # ============================================================
-# Load ensemble predictions
+# Ensemble analysis
 # ============================================================
 
-architecture_data = {}
+def run_ensemble_analysis(
+    n_bootstraps: int = N_BOOTSTRAPS,
+    random_seed: int = RANDOM_SEED,
+    show_progress: bool = True,
+) -> pd.DataFrame:
+    architecture_data = {}
 
-for architecture_label, architecture_tag in (
-    ARCHITECTURES.items()
-):
-    architecture_data[architecture_label] = (
-        load_architecture_ensemble(
-            architecture_tag=architecture_tag,
-        )
-    )
-
-    print(
-        f"Loaded ensemble predictions: "
-        f"{architecture_label}"
-    )
-
-
-# Verify that all architectures use the same labels.
-reference_labels = architecture_data[
-    "CPM sequential"
-][1]
-
-reference_mask = architecture_data[
-    "CPM sequential"
-][2]
-
-for architecture_label, (
-    _,
-    labels,
-    mask,
-) in architecture_data.items():
-    if not np.array_equal(mask, reference_mask):
-        raise ValueError(
-            f"Mask mismatch: {architecture_label}"
-        )
-
-    if not np.allclose(
-        labels[mask],
-        reference_labels[mask],
-        atol=1e-8,
+    for architecture_label, architecture_tag in (
+        ARCHITECTURES.items()
     ):
-        raise ValueError(
-            f"Gold-label mismatch: "
-            f"{architecture_label}"
+        architecture_data[architecture_label] = (
+            load_architecture_ensemble(
+                architecture_tag=architecture_tag,
+            )
         )
-
-
-# ============================================================
-# Run comparisons
-# ============================================================
-
-results = []
-
-for model_a_name, model_b_name in COMPARISONS:
-    predictions_a = architecture_data[
-        model_a_name
-    ][0]
-
-    predictions_b = architecture_data[
-        model_b_name
-    ][0]
-
-    print()
-    print("=" * 80)
-    print(f"{model_a_name} vs {model_b_name}")
-    print("=" * 80)
-
-    for metric_name in METRICS:
-        result = paired_bootstrap(
-            predictions_a=predictions_a,
-            predictions_b=predictions_b,
-            labels=reference_labels,
-            valid_mask=reference_mask,
-            metric_name=metric_name,
-        )
-
-        result["Model A"] = model_a_name
-        result["Model B"] = model_b_name
-
-        results.append(result)
 
         print(
-            f"{metric_name:25} "
-            f"diff={result['Difference Favoring A']:+.6f} "
-            f"CI=[{result['95% CI Low']:+.6f}, "
-            f"{result['95% CI High']:+.6f}] "
-            f"P(A better)="
-            f"{result['Probability A Better']:.3f}"
+            f"Loaded ensemble predictions: "
+            f"{architecture_label}",
+            flush=True,
         )
 
+    reference_labels = architecture_data[
+        "CPM sequential"
+    ][1]
 
-results_df = pd.DataFrame(results)
+    reference_mask = architecture_data[
+        "CPM sequential"
+    ][2]
 
-column_order = [
-    "Model A",
-    "Model B",
-    "Metric",
-    "Model A Score",
-    "Model B Score",
-    "Difference Favoring A",
-    "95% CI Low",
-    "95% CI High",
-    "Probability A Better",
-    "Bootstrap p-value",
-    "Bootstrap Samples",
-]
+    for architecture_label, (
+        _,
+        labels,
+        mask,
+    ) in architecture_data.items():
+        if not np.array_equal(mask, reference_mask):
+            raise ValueError(
+                f"Mask mismatch: {architecture_label}"
+            )
 
-results_df = results_df[column_order]
+        if not np.allclose(
+            labels[mask],
+            reference_labels[mask],
+            atol=1e-8,
+        ):
+            raise ValueError(
+                f"Gold-label mismatch: "
+                f"{architecture_label}"
+            )
 
-output_path = (
-    OUTPUT_DIR
-    / "paired_bootstrap_validation_ensemble.csv"
-)
+    results = []
 
-results_df.to_csv(
-    output_path,
-    index=False,
-)
+    for comparison_idx, (
+        model_a_name,
+        model_b_name,
+    ) in enumerate(COMPARISONS):
+        predictions_a = architecture_data[
+            model_a_name
+        ][0]
 
-print()
-print("Saved:", output_path)
-print()
-print(results_df.to_string(index=False))
+        predictions_b = architecture_data[
+            model_b_name
+        ][0]
+
+        print()
+        print("=" * 80)
+        print(f"{model_a_name} vs {model_b_name}")
+        print("=" * 80)
+
+        for metric_idx, metric_name in enumerate(METRICS):
+            metric_seed = (
+                random_seed
+                + comparison_idx * 10_000
+                + metric_idx
+            )
+
+            result = paired_bootstrap(
+                predictions_a=predictions_a,
+                predictions_b=predictions_b,
+                labels=reference_labels,
+                valid_mask=reference_mask,
+                metric_name=metric_name,
+                n_bootstraps=n_bootstraps,
+                random_seed=metric_seed,
+                show_progress=show_progress,
+                progress_desc=(
+                    f"{model_a_name} vs "
+                    f"{model_b_name}: {metric_name}"
+                ),
+            )
+
+            result["Model A"] = model_a_name
+            result["Model B"] = model_b_name
+            results.append(result)
+
+            print(
+                f"{metric_name:25} "
+                f"diff="
+                f"{result['Difference Favoring A']:+.6f} "
+                f"CI=[{result['95% CI Low']:+.6f}, "
+                f"{result['95% CI High']:+.6f}] "
+                f"P(A better)="
+                f"{result['Probability A Better']:.3f}",
+                flush=True,
+            )
+
+    results_df = pd.DataFrame(results)
+
+    column_order = [
+        "Model A",
+        "Model B",
+        "Metric",
+        "Model A Score",
+        "Model B Score",
+        "Difference Favoring A",
+        "95% CI Low",
+        "95% CI High",
+        "Probability A Better",
+        "Bootstrap p-value",
+        "Bootstrap Samples",
+    ]
+
+    results_df = results_df[column_order]
+
+    output_path = (
+        OUTPUT_DIR
+        / "paired_bootstrap_validation_ensemble.csv"
+    )
+
+    results_df.to_csv(
+        output_path,
+        index=False,
+    )
+
+    print()
+    print("Saved:", output_path)
+    print()
+    print(results_df.to_string(index=False))
+
+    return results_df
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run paired bootstrap validation on "
+            "three-seed architecture ensembles."
+        )
+    )
+
+    parser.add_argument(
+        "--n-bootstraps",
+        type=int,
+        default=N_BOOTSTRAPS,
+        help="Number of paired bootstrap resamples.",
+    )
+
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=RANDOM_SEED,
+    )
+
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable tqdm progress bars.",
+    )
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    print(f"DATA_ROOT:    {DATA_ROOT}")
+    print(f"RUNS_ROOT:    {RUNS_ROOT}")
+    print(f"OUTPUT_DIR:   {OUTPUT_DIR}")
+    print(f"Bootstraps:   {args.n_bootstraps}")
+    print()
+
+    run_ensemble_analysis(
+        n_bootstraps=args.n_bootstraps,
+        random_seed=args.random_seed,
+        show_progress=not args.no_progress,
+    )
+
+
+if __name__ == "__main__":
+    main()

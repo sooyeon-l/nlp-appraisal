@@ -7,14 +7,15 @@ import numpy as np
 import pandas as pd
 
 from src.config import (
+    SAVE_PATH,
     OBJECTIVE_GROUPS,
     TARGET_DIMS,
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RUNS_ROOT = PROJECT_ROOT / "runs"
-OUTPUT_DIR = PROJECT_ROOT / "outputs" / "eval"
+DATA_ROOT = Path(SAVE_PATH)
+RUNS_ROOT = DATA_ROOT / "runs"
+OUTPUT_DIR = DATA_ROOT / "outputs" / "eval"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -1,0 +1,25 @@
+entry_id,text,reference_emotions,design_note
+dev_001,"I have barely gotten out of bed since my uncle died. Everything reminds me of him, and I cannot understand how life is supposed to continue.",grief; sadness,Clear loss-related entry.
+dev_002,My manager took credit for the work I stayed up all week finishing. I feel furious every time I think about it.,anger; annoyance; disapproval,Other-responsibility and goal obstruction.
+dev_003,I keep checking my phone because the doctor still has not called. I know something may be wrong and I cannot focus on anything else.,nervousness; fear,Uncertainty and low control.
+dev_004,"I lied to my friend because I was embarrassed, and now I cannot stop thinking about how much I hurt her.",remorse; embarrassment; sadness,Self-responsibility and norm violation.
+dev_005,"After months of worrying, the scan came back clear. I finally feel like I can breathe again.",relief; joy; gratitude,Positive outcome following threat.
+dev_006,I got the internship I wanted. I worked so hard for this and I am honestly proud of myself.,pride; joy; excitement,Self-responsibility and goal support.
+dev_007,My partner remembered the tiny detail I mentioned weeks ago and surprised me with it. I feel so loved and grateful.,love; gratitude; joy,Positive other-responsibility.
+dev_008,The instructions changed three times and nobody can explain what we are supposed to submit. I feel completely lost.,confusion; annoyance,Uncertainty and low predictability.
+dev_009,"I thought the presentation had gone badly, but everyone started clapping. I did not expect that at all.",surprise; relief; joy,Unexpected positive result.
+dev_010,"I want to apply, but I am scared I will fail and waste everyone's time. Part of me is excited, though.",desire; nervousness; excitement,Mixed approach and avoidance.
+dev_011,"Nothing terrible happened today. I made dinner, answered some emails, and went for a walk.",neutral,Low emotional intensity.
+dev_012,My sister is struggling and I keep thinking about what I can do to make things easier for her.,caring; sadness,Other-focused concern.
+dev_013,They ignored every safety rule and then acted surprised when someone got hurt. It is disgusting.,disgust; anger; disapproval,Norm violation and other-responsibility.
+dev_014,"I studied for weeks and still failed by one point. I am not angry, just deeply disappointed.",disappointment; sadness,Expected goal failure.
+dev_015,I saw an unfamiliar light moving across the sky and spent the rest of the night trying to understand what it was.,curiosity; surprise; confusion,Novelty and attention.
+dev_016,"I finally understood why that conversation bothered me so much: I felt dismissed, not merely disagreed with.",realization; sadness; annoyance,Insight into prior appraisal.
+dev_017,"Everyone praised my design, but I keep thinking they will realize I am not actually talented.",nervousness; embarrassment,Positive feedback with insecurity.
+dev_018,"The trip was canceled because of the storm. I know nobody caused it, but I am still upset and helpless.",sadness; disappointment,Circumstance responsibility and low control.
+dev_019,She defended me when nobody else would. I admire her courage more than I can explain.,admiration; gratitude,Positive other-responsibility and standards.
+dev_020,"I am irritated that the meeting ran late, but it is not a big deal and I will probably forget tomorrow.",annoyance,Low-intensity negative emotion.
+dev_021,I cannot tell whether I am sad that it ended or relieved that I no longer have to keep trying.,sadness; relief,Explicit mixed emotion.
+dev_022,"The result is out tomorrow. I have done everything I can, so now I am trying to accept whatever happens.",nervousness; optimism,Uncertainty with acceptance.
+dev_023,"I volunteered to lead the project and it succeeded, but I also know the team carried me through the difficult parts.",pride; gratitude; joy,Mixed self- and other-responsibility.
+dev_024,"I read the message several times. It was not openly rude, yet something about it made me uncomfortable.",confusion; annoyance,Implicit and ambiguous emotion.

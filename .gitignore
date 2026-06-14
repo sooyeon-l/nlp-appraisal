@@ -17,3 +17,5 @@ outputs/
 outputs/eval/
 
 runs/
+
+printf "\n# Temporary prediction archives\nbootstrap_predictions.zip\ntest_predictions.zip\n" >> .gitignore
